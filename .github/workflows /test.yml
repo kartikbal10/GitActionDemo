@@ -14,7 +14,7 @@ env:
   SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
   EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
   EMAIL_TO: ${{ secrets.EMAIL_TO }}
-
+ 
 jobs:
   security-scan:
     runs-on: ubuntu-latest

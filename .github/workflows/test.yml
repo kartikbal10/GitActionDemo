@@ -1,0 +1,160 @@
+name: Snyk Security Report
+
+on:
+  schedule:
+    - cron: '0 0 * * MON'  # Runs every Monday at midnight
+  workflow_dispatch:  # Allows manual trigger
+
+env:
+  SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+  SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
+  SMTP_PORT: ${{ secrets.SMTP_PORT }}
+  SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+  SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+  EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+  EMAIL_TO: ${{ secrets.EMAIL_TO }}
+
+jobs:
+  security-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install snyk-python-plugin requests
+          npm install -g snyk
+
+      - name: Authenticate with Snyk
+        run: snyk auth ${{ secrets.SNYK_TOKEN }}
+
+      - name: Run Snyk test and generate report
+        run: |
+          snyk test --json > snyk-report.json || true
+          snyk monitor --json > snyk-monitor.json || true
+
+      - name: Create HTML report
+        run: |
+          cat > report.html << 'EOL'
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <style>
+              body { font-family: Arial, sans-serif; margin: 20px; }
+              .vulnerability { margin: 20px 0; padding: 10px; border: 1px solid #ddd; }
+              .high { border-left: 5px solid #ff0000; }
+              .medium { border-left: 5px solid #ff9900; }
+              .low { border-left: 5px solid #ffff00; }
+            </style>
+          </head>
+          <body>
+            <h1>Snyk Security Report</h1>
+            <div id="content"></div>
+          </body>
+          </html>
+          EOL
+
+          python3 - << 'EOL'
+          import json
+          import datetime
+
+          def create_html_report():
+              try:
+                  with open('snyk-report.json', 'r') as f:
+                      data = json.load(f)
+                  
+                  html_content = []
+                  
+                  # Summary section
+                  total_vulns = len(data.get('vulnerabilities', []))
+                  html_content.append(f"<h2>Summary</h2>")
+                  html_content.append(f"<p>Total vulnerabilities found: {total_vulns}</p>")
+                  html_content.append(f"<p>Scan date: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>")
+                  
+                  # Vulnerabilities section
+                  html_content.append("<h2>Vulnerabilities</h2>")
+                  
+                  for vuln in data.get('vulnerabilities', []):
+                      severity = vuln.get('severity', 'unknown').lower()
+                      title = vuln.get('title', 'Unknown')
+                      package = vuln.get('package', 'Unknown')
+                      description = vuln.get('description', 'No description available')
+                      
+                      html_content.append(f"""
+                          <div class="vulnerability {severity}">
+                              <h3>{title}</h3>
+                              <p><strong>Package:</strong> {package}</p>
+                              <p><strong>Severity:</strong> {severity}</p>
+                              <p><strong>Description:</strong> {description}</p>
+                          </div>
+                      """)
+                  
+                  # Insert content into HTML template
+                  with open('report.html', 'r') as f:
+                      template = f.read()
+                  
+                  final_html = template.replace(
+                      '<div id="content"></div>',
+                      '<div id="content">' + ''.join(html_content) + '</div>'
+                  )
+                  
+                  with open('report.html', 'w') as f:
+                      f.write(final_html)
+              
+              except Exception as e:
+                  print(f"Error creating report: {str(e)}")
+                  with open('report.html', 'w') as f:
+                      f.write(f"<h1>Error generating report</h1><p>{str(e)}</p>")
+
+          create_html_report()
+          EOL
+
+      - name: Send email
+        run: |
+          python3 - << 'EOL'
+          import smtplib
+          import os
+          from email.mime.text import MIMEText
+          from email.mime.multipart import MIMEMultipart
+          from email.mime.application import MIMEApplication
+
+          def send_email():
+              msg = MIMEMultipart()
+              msg['From'] = os.environ['EMAIL_FROM']
+              msg['To'] = os.environ['EMAIL_TO']
+              msg['Subject'] = f"Snyk Security Report - {os.environ.get('GITHUB_REPOSITORY', 'Repository')}"
+
+              # Add body
+              body = "Please find attached the latest Snyk security report."
+              msg.attach(MIMEText(body, 'plain'))
+
+              # Attach HTML report
+              with open('report.html', 'r') as f:
+                  attachment = MIMEApplication(f.read(), _subtype='html')
+                  attachment.add_header('Content-Disposition', 'attachment', filename='snyk-report.html')
+                  msg.attach(attachment)
+
+              # Send email
+              with smtplib.SMTP(os.environ['SMTP_SERVER'], int(os.environ['SMTP_PORT'])) as server:
+                  server.starttls()
+                  server.login(os.environ['SMTP_USERNAME'], os.environ['SMTP_PASSWORD'])
+                  server.send_message(msg)
+
+          send_email()
+          EOL
+
+      - name: Upload report as artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: snyk-report
+          path: |
+            snyk-report.json
+            snyk-monitor.json
+            report.html

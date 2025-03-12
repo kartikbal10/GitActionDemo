@@ -2,7 +2,7 @@ name: Snyk Security Report
 
 on:
   schedule:
-    - cron: '0 0 * * MON'  # Runs every Monday at midnight
+    #- cron: '0 0 * * MON'  # Runs every Monday at midnight
   workflow_dispatch:  # Allows manual trigger
 
 env:
